@@ -1,0 +1,213 @@
+clc;
+clear;
+
+% 加载示例数据
+data = [
+    1    100    2    3.64
+    1    200    4    2.69
+    1    300    1    2.02
+    1    400    3    1.74
+    1    500    5    1.73
+    2    100    3    4.25
+    2    200    5    3.68
+    2    300    2    1.80
+    2    400    4    1.88
+    2    500    1    1.51
+    3    100    4    4.63
+    3    200    1    1.83
+    3    300    3    2.02
+    3    400    5    2.21
+    3    500    2    1.43
+    4    100    5    7.29
+    4    200    2    2.23
+    4    300    4    2.39
+    4    400    1    2.03
+    4    500    3    1.45
+    5    100    1    3.49
+    5    200    3    2.78
+    5    300    5    2.57
+    5    400    2    1.48
+    5    500    4    1.59
+];
+
+% 分割数据集
+train_data = data(1:22, :);
+calibration_data = data(23:25, :);
+
+% 输入参数和输出
+X_train = train_data(:, 1:3);
+y_train = train_data(:, 4);
+X_calib = calibration_data(:, 1:3);
+y_calib = calibration_data(:, 4);
+
+% 数据标准化
+[X_train_scaled, X_mu, X_sigma] = zscore(X_train);
+[y_train_scaled, y_mu, y_sigma] = zscore(y_train);
+X_calib_scaled = (X_calib - X_mu) ./ X_sigma;
+y_calib_scaled = (y_calib - y_mu) ./ y_sigma;
+
+% 构建BP神经网络
+hiddenLayerSizes = [40, 10, 20]; % 三个隐藏层
+net = fitnet(hiddenLayerSizes);
+
+% 设置激活函数为tansig
+for i = 1:length(net.layers)
+    net.layers{i}.transferFcn = 'tansig';
+end
+
+% 设置训练参数
+net.trainParam.epochs = 10000; % 增加训练次数
+net.trainParam.lr = 0.01; % 调整学习率
+net.trainParam.goal = 1e-4; % 设置目标误差
+
+% 训练BP神经网络
+[net, tr] = train(net, X_train_scaled', y_train_scaled');
+
+% 查看训练结果
+view(net);
+plotperform(tr);
+
+% 对校正数据进行预测
+y_calib_pred_scaled = net(X_calib_scaled');
+y_calib_pred = y_calib_pred_scaled' * y_sigma + y_mu;
+
+% 计算误差
+error = y_calib - y_calib_pred;
+mse_error = mean(error.^2);
+disp(['均方误差: ', num2str(mse_error)]);
+
+% 遗传算法参数初始化
+maxgen = 100;                         % 进化代数，即迭代次数
+sizepop = 100;                        % 种群规模
+pcross = 0.5;                         % 交叉概率
+pmutation = 0.5;                      % 变异概率
+lenchrom = 3;                         % 个体长度
+bound = [0.1 5; 10 1000; 1 10];          % 参数范围
+
+% 初始化种群
+pop = initialize_population(sizepop, lenchrom, bound);
+
+% 记录每代的最佳适应度值
+bestFitnessValues = zeros(maxgen, 1);
+
+% 遗传算法迭代
+for gen = 1:maxgen
+    % 计算适应度
+    fitness = zeros(sizepop, 1);
+    for i = 1:sizepop
+        fitness(i) = fun(pop(i, :), net, X_mu, X_sigma, y_mu, y_sigma);
+    end
+    
+    % 记录当前代的最佳适应度值
+    bestFitnessValues(gen) = min(fitness);
+    
+    % 输出当前代的信息
+    disp(['Generation ' num2str(gen) ': Best Fitness = ' num2str(bestFitnessValues(gen))]);
+    
+    
+     % 精英保留策略：保留最优个体
+    [~, best_idx] = min(fitness);
+    best_individual = pop(best_idx, :);
+    
+    % 选择
+    pop = select(pop, fitness);
+    
+    % 交叉
+    pop = crossover(pop, pcross, bound);
+    
+    % 变异
+    pop = mutate(pop, pmutation, bound);
+    
+     % 将最优个体加入到新的种群中，替换掉最差的个体
+    worst_idx = find(fitness == max(fitness), 1);
+    pop(worst_idx, :) = best_individual;
+end
+
+% 找到最优解
+best_fitness = inf;
+best_chrom = [];
+for i = 1:sizepop
+    current_fitness = fun(pop(i, :), net, X_mu, X_sigma, y_mu, y_sigma);
+    if current_fitness < best_fitness
+        best_fitness = current_fitness;
+        best_chrom = pop(i, :);
+    end
+end
+
+% 显示最优结果
+disp(['最优激光功率: ', num2str(best_chrom(1))]);
+disp(['最优扫描速度: ', num2str(best_chrom(2))]);
+disp(['最优加工次数: ', num2str(best_chrom(3))]);
+disp(['最小粗糙度: ', num2str(best_fitness)]);
+
+% 绘制适应度进化曲线
+figure;
+plot(1:maxgen, bestFitnessValues, 'LineWidth', 2); % 适应度值
+xlabel('Generation');
+ylabel('Best Fitness Value');
+title('Fitness Evolution');
+
+% 函数定义部分
+function fitness = fun(x, net, X_mu, X_sigma, y_mu, y_sigma)
+    % 标准化输入
+    x_scaled = (x - X_mu) ./ X_sigma;
+    % 预测粗糙度
+    y_scaled = net(x_scaled');
+    % 反标准化输出
+    y = y_scaled * y_sigma + y_mu;
+    % 使用目标函数值作为适应度
+    fitness = y; % 我们希望最小化y
+end
+
+function pop = initialize_population(sizepop, lenchrom, bound)
+    pop = zeros(sizepop, lenchrom);
+    for i = 1:sizepop
+        for j = 1:lenchrom
+            pop(i, j) = bound(j, 1) + (bound(j, 2) - bound(j, 1)) * rand;
+        end
+    end
+end
+
+function new_pop = select(pop, fitness)
+    % 轮盘赌选择
+    fitness = 1./fitness; % 适应度值越高越好，转化为最大化问题
+    total_fitness = sum(fitness);
+    probs = fitness / total_fitness;
+    cum_probs = cumsum(probs);
+    new_pop = zeros(size(pop));
+    for i = 1:size(pop, 1)
+        r = rand;
+        index = find(cum_probs >= r, 1, 'first');
+        new_pop(i, :) = pop(index, :);
+    end
+end
+
+function new_pop = crossover(pop, pcross, bound)
+    [sizepop, lenchrom] = size(pop);
+    new_pop = pop;
+    for i = 1:2:sizepop-1
+        if rand < pcross
+            cross_point = randi([1 lenchrom-1]);
+            temp1 = pop(i, cross_point+1:end);
+            temp2 = pop(i+1, cross_point+1:end);
+            new_pop(i, cross_point+1:end) = temp2;
+            new_pop(i+1, cross_point+1:end) = temp1;
+            
+            % 确保交叉后的个体在范围内
+            new_pop(i, :) = max(min(new_pop(i, :), bound(:, 2)'), bound(:, 1)');
+            new_pop(i+1, :) = max(min(new_pop(i+1, :), bound(:, 2)'), bound(:, 1)');
+        end
+    end
+end
+
+function new_pop = mutate(pop, pmutation, bound)
+    [sizepop, lenchrom] = size(pop);
+    new_pop = pop;
+    for i = 1:sizepop
+        for j = 1:lenchrom
+            if rand < pmutation
+                new_pop(i, j) = bound(j, 1) + (bound(j, 2) - bound(j, 1)) * rand;
+            end
+        end
+    end
+end
